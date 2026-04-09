@@ -1,0 +1,44 @@
+#!/bin/bash
+# OpenClaw Multi-Agent Harness 启动脚本
+
+cd ~/.openclaw/workspace/openclaw_harness
+
+# 根据参数选择模式
+MODE=${1:-help}
+
+case $MODE in
+    run)
+        shift
+        python3 -m src run "$@"
+        ;;
+    web|server|http)
+        PORT=${1:-8080}
+        python3 -m src web_server -p $PORT
+        ;;
+    status)
+        python3 -m src status
+        ;;
+    interactive|i)
+        python3 -m src interactive
+        ;;
+    monitor|m)
+        python3 -m src monitor
+        ;;
+    help|*)
+        echo "OpenClaw Multi-Agent Harness"
+        echo ""
+        echo "Usage: openclaw-harness <command> [options]"
+        echo ""
+        echo "Commands:"
+        echo "  run <task>          执行任务"
+        echo "  web [port]          启动网页服务器 (默认 8080)"
+        echo "  status              显示系统状态"
+        echo "  interactive         交互模式"
+        echo "  monitor            监控模式"
+        echo "  help               显示帮助"
+        echo ""
+        echo "Examples:"
+        echo "  openclaw-harness run \"写一个 hello world\""
+        echo "  openclaw-harness web 8080"
+        ;;
+esac

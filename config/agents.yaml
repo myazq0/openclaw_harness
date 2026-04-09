@@ -1,0 +1,76 @@
+# OpenClaw Agent 配置
+# 使用 YAML 格式，方便阅读和修改
+
+# Agent 定义
+agents:
+  leader:
+    role: leader
+    description: "领导 Agent，负责任务分配和协调"
+    prompt_file: "config/prompts/leader.txt"
+    enabled: true
+  
+  coder:
+    role: coder
+    description: "程序员，负责编写代码"
+    prompt_file: "config/prompts/coder.txt"
+    enabled: true
+  
+  researcher:
+    role: researcher
+    description: "研究员，负责研究和调研"
+    prompt_file: "config/prompts/researcher.txt"
+    enabled: true
+  
+  writer:
+    role: writer
+    description: "写作者，负责撰写内容"
+    prompt_file: "config/prompts/writer.txt"
+    enabled: true
+  
+  analyst:
+    role: analyst
+    description: "分析师，负责数据分析"
+    prompt_file: "config/prompts/analyst.txt"
+    enabled: true
+  
+  general:
+    role: general
+    description: "通用助手"
+    prompt_file: "config/prompts/general.txt"
+    enabled: true
+
+
+# 系统配置
+system:
+  # 默认超时时间（秒）
+  timeout: 300
+  
+  # 最大并发任务数
+  max_concurrent_tasks: 5
+  
+  # 是否启用动态 Agent
+  enable_dynamic_agents: true
+  
+  # 最大动态 Agent 数量
+  max_dynamic_agents: 10
+
+
+# LLM 配置
+llm:
+  # 默认使用哪个模型
+  provider: "mock"  # mock/openai/anthropic
+  
+  # Mock 配置
+  mock:
+    # 模拟延迟（秒）
+    delay: 0.5
+    # 模拟每 token 耗时
+    token_delay: 0.001
+
+
+# 日志配置
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(levelname)-8s | %(message)s"
+  file: "logs/openclaw.log"
+  console: true
