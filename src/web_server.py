@@ -2,6 +2,8 @@
 """
 OpenClaw Multi-Agent Harness Web Server v3.0
 RESTful API + 简洁前端
+
+版本: 3.1 - 新增执行追踪 API
 """
 import sys
 import json
@@ -10,7 +12,7 @@ import time
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
-from harness import OpenClawHarness, TaskPriority, Task, TaskStatus
+from harness import OpenClawHarness, TaskPriority, Task, TaskStatus, tracer
 from execution_loop import LoopManager, create_execution_loop
 
 # 全局实例
@@ -280,6 +282,141 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             max-height: 150px;
             overflow-y: auto;
         }
+        
+        /* Execution Trace Panel - v3.1 */
+        .trace-panel {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        
+        .trace-session {
+            background: #f0f9ff;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            overflow: hidden;
+        }
+        
+        .trace-header {
+            background: #0ea5e9;
+            color: white;
+            padding: 8px 12px;
+            font-weight: 600;
+            font-size: 13px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .trace-task {
+            font-size: 12px;
+            color: #64748b;
+            padding: 8px 12px;
+            border-bottom: 1px solid #e2e8f0;
+            background: #fff;
+        }
+        
+        .trace-step {
+            padding: 10px 12px;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 12px;
+        }
+        
+        .trace-step:last-child { border-bottom: none; }
+        
+        .trace-step-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+        
+        .trace-step-index {
+            width: 20px;
+            height: 20px;
+            background: #3b82f6;
+            color: white;
+            border-radius: 4px;
+            text-align: center;
+            line-height: 20px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        
+        .trace-caller {
+            font-weight: 600;
+            color: #1e40af;
+        }
+        
+        .trace-arrow {
+            color: #94a3b8;
+        }
+        
+        .trace-callee {
+            font-weight: 600;
+            color: #059669;
+        }
+        
+        .trace-action-tag {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            background: #e0e7ff;
+            color: #3730a3;
+        }
+        
+        .trace-timestamp {
+            margin-left: auto;
+            color: #94a3b8;
+            font-size: 11px;
+        }
+        
+        .trace-duration {
+            font-size: 11px;
+            color: #f59e0b;
+            margin-left: 8px;
+        }
+        
+        .trace-content-block {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 8px;
+            border-radius: 4px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 11px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 120px;
+            overflow-y: auto;
+            margin-top: 6px;
+        }
+        
+        .trace-prompt-label {
+            color: #60a5fa;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        
+        .trace-response-label {
+            color: #34d399;
+            font-weight: 600;
+            margin-top: 8px;
+            margin-bottom: 4px;
+        }
+        
+        .trace-config-block {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 6px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-top: 8px;
+        }
+        
+        .trace-config-label {
+            color: #64748b;
+            font-weight: 600;
+        }
+        
         .logs { max-height: 250px; overflow-y: auto; }
         
         .log-item {
@@ -446,6 +583,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <div class="log-empty">暂无日志</div>
             </div>
         </div>
+        
+        <!-- Execution Trace (v3.1) -->
+        <div class="card">
+            <div class="card-title">🔍 执行追踪 <span id="traceCount"></span></div>
+            <div class="trace-panel" id="tracePanel">
+                <div class="log-empty">暂无追踪记录</div>
+            </div>
+        </div>
     </div>
     
     <script>
@@ -577,6 +722,45 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         <span class="log-time">${log.start_time}</span>
                         <span class="task-status ${statusClass}">${log.status}</span>
                         ${task}
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // ========== Execution Trace (v3.1) ==========
+        async function fetchTrace() { return api('/api/trace'); }
+        
+        function renderTrace(data) {
+            const tracePanel = $('tracePanel');
+            const traces = data.traces || [];
+            $('traceCount').textContent = traces.length > 0 ? `(${traces.length})` : '';
+            
+            if (traces.length === 0) {
+                tracePanel.innerHTML = '<div class="log-empty">暂无追踪记录</div>';
+                return;
+            }
+            
+            // 渲染每个会话
+            tracePanel.innerHTML = traces.slice().reverse().slice(0, 5).map(session => {
+                const task = session.task.length > 60 ? session.task.substring(0, 60) + '...' : session.task;
+                return `
+                    <div class="trace-session">
+                        <div class="trace-header">
+                            <span>🔍 ${session.session_id}</span>
+                            <span>${session.start_time}</span>
+                        </div>
+                        <div class="trace-task">${task}</div>
+                        <div class="trace-steps">
+                            <div class="trace-step">
+                                <div class="trace-step-header">
+                                    <span class="trace-step-index">1</span>
+                                    <span class="trace-caller">等待执行...</span>
+                                    <span class="trace-arrow">→</span>
+                                    <span class="trace-callee">-</span>
+                                    <span class="trace-timestamp">-</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 `;
             }).join('');
@@ -730,8 +914,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         
 async function refresh() {
             try {
-                const [status, tasks, agents, messages, logs] = await Promise.all([
-                    fetchStatus(), fetchTasks(), fetchAgents(), fetchMessages(), fetchLogs()
+                const [status, tasks, agents, messages, logs, trace] = await Promise.all([
+                    fetchStatus(), fetchTasks(), fetchAgents(), fetchMessages(), fetchLogs(), fetchTrace()
                 ]);
                 
                 renderStatus(status);
@@ -739,6 +923,7 @@ async function refresh() {
                 renderAgents(agents);
                 renderMessages(messages);
                 renderLogs(logs);
+                renderTrace(trace);
             } catch (e) {
                 console.error('刷新失败:', e);
             }
@@ -807,6 +992,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif self.path == '/messages': self.send_json(self.get_messages())
         elif self.path == '/execution': self.send_json(self.get_execution())
         elif self.path.startswith('/execution/'): self.send_json(self.get_execution_detail())
+        elif self.path == '/api/trace': self.send_json(self.get_trace())
+        elif self.path.startswith('/api/trace/'): self.send_json(self.get_trace_detail())
         
         else: self.send_error(404)
     
@@ -879,6 +1066,31 @@ class RequestHandler(BaseHTTPRequestHandler):
         if not record:
             return {"error": "Execution not found"}
         return record.to_display()
+    
+    # ========== 执行追踪 API (v3.1) ==========
+    def get_trace(self):
+        """获取所有追踪会话"""
+        sessions = tracer.get_all_sessions()
+        traces = []
+        for session_id in sessions:
+            session_traces = tracer.get_session_traces(session_id)
+            for t in session_traces:
+                traces.append({
+                    "session_id": t.get("session_id", ""),
+                    "task": t.get("task", ""),
+                    "start_time": t.get("start_time", ""),
+                    "steps_count": len(t.get("steps", []))
+                })
+        return {"traces": traces, "total_sessions": len(sessions)}
+    
+    def get_trace_detail(self):
+        """获取追踪详情"""
+        session_id = self.path.split('/')[-1]
+        traces = tracer.get_session_traces(session_id)
+        if not traces:
+            return {"error": "Session not found"}
+        # 返回最近的一个会话
+        return traces[-1] if traces else {"error": "Empty"}
     
     def handle_execute(self):
         """开始动态执行循环"""

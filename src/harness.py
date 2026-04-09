@@ -5,6 +5,8 @@ OpenClaw Harness - 核心协调器 v3.0
 
 作者: OpenClaw
 日期: 2024-2026
+
+版本: 3.1 - 新增执行追踪 (Execution Trace)
 """
 
 import json
@@ -50,6 +52,87 @@ class AgentRole(Enum):
     WRITER = "writer"       # 写作者
     ANALYST = "analyst"      # 分析师
     GENERAL = "general"     # 通用助手
+
+
+# ========== 执行追踪器 (v3.1 新增) ==========
+
+class ExecutionTracer:
+    """
+    执行追踪器 - 记录 Harness 与 Agent 之间的每次交互
+    用于在 Web 界面上实时展示执行过程
+    """
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        self._traces: List[Dict] = []
+        self._lock = threading.Lock()
+        self._current_session: str = ""
+    
+    def start_session(self, session_id: str, task: str):
+        """开始新的追踪会话"""
+        with self._lock:
+            self._current_session = session_id
+            self._traces.append({
+                "session_id": session_id,
+                "task": task,
+                "start_time": datetime.now().strftime("%H:%M:%S"),
+                "steps": []
+            })
+    
+    def add_step(self, step: Dict):
+        """
+        添加执行步骤
+        
+        step 包含:
+        - step_index: 步骤序号
+        - caller: 调用者 (Harness / Agent名)
+        - callee: 被调用者 (Agent名)
+        - action: 动作 (plan/execute/chain/call_llm...)
+        - prompt: 发送给 LLM 的完整 prompt
+        - response: LLM 返回结果
+        - config: 配置信息 (model, max_tokens 等)
+        - duration: 耗时(秒)
+        - timestamp: 时间戳
+        """
+        with self._lock:
+            if self._traces and self._traces[-1].get("session_id") == self._current_session:
+                self._traces[-1]["steps"].append(step)
+    
+    def get_session_traces(self, session_id: str = "") -> List[Dict]:
+        """获取指定会话的追踪记录"""
+        with self._lock:
+            if session_id:
+                return [t for t in self._traces if t.get("session_id") == session_id]
+            return self._traces
+    
+    def get_all_sessions(self) -> List[str]:
+        """获取所有会话ID"""
+        with self._lock:
+            return list(set(t.get("session_id", "") for t in self._traces))
+    
+    def clear(self, session_id: str = ""):
+        """清除追踪记录"""
+        with self._lock:
+            if session_id:
+                self._traces = [t for t in self._traces if t.get("session_id") != session_id]
+            else:
+                self._traces = []
+
+
+# 全局追踪器实例
+tracer = ExecutionTracer()
 
 
 # ========== 数据结构 ==========
@@ -412,17 +495,55 @@ class LLMAgent(BaseAgent):
         )
     
     def _call_llm(self, prompt: str) -> str:
-        """调用 LLM"""
+        """
+        调用 LLM
+        v3.1: 添加执行追踪
+        """
+        start_time = time.time()
         provider = self._config.get("system", {}).get("provider", "mock")
         
+        # 构建 LLM 配置信息（用于追踪显示）
+        llm_config = {
+            "provider": provider,
+            "model": self._config.get(provider, {}).get("model", "mock"),
+            "max_tokens": self._config.get(provider, {}).get("max_tokens", 2000),
+            "temperature": self._config.get(provider, {}).get("temperature", 0.7),
+        }
+        
+        # 记录发送的 prompt（完整上下文）
+        send_prompt = prompt
+        if self.system_prompt:
+            send_prompt = f"[System]\n{self.system_prompt}\n\n[User]\n{prompt}"
+        
+        # 调用 LLM
         if provider == "qwen":
-            return self._call_qwen(prompt)
+            response = self._call_qwen(prompt)
         elif provider == "openai":
-            return self._call_openai(prompt)
+            response = self._call_openai(prompt)
         elif provider == "anthropic":
-            return self._call_anthropic(prompt)
+            response = self._call_anthropic(prompt)
         else:
-            return self._execute_mock(prompt)
+            response = self._execute_mock(prompt)
+        
+        # 记录执行步骤
+        duration = time.time() - start_time
+        tracer.add_step({
+            "step_index": len(tracer.get_session_traces(tracer._current_session)) + 1 if tracer._current_session else 1,
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "caller": "Harness",
+            "callee": self.agent_id,
+            "agent_role": self.role.value,
+            "action": "call_llm",
+            "prompt": send_prompt[:2000],  # 截断过长 prompt
+            "prompt_tokens": len(send_prompt),
+            "response": response[:2000],
+            "response_tokens": len(response),
+            "llm_config": llm_config,
+            "duration": round(duration, 2),
+            "status": "success" if response else "empty"
+        })
+        
+        return response
     
     def _execute_mock(self, task: str) -> str:
         """模拟响应"""
@@ -751,6 +872,24 @@ class OpenClawHarness:
         if not agent:
             return TaskResult(task_id=task_id, status="failed", error="Agent not found")
         
+        # 开始追踪会话 v3.1
+        session_id = f"{task_id}"
+        tracer.start_session(session_id, task["description"])
+        
+        # 记录任务分配步骤
+        tracer.add_step({
+            "step_index": 1,
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "caller": "Harness",
+            "callee": "Scheduler",
+            "action": "assign_task",
+            "prompt": f"任务: {task['description']}\n分配给: {agent.agent_id}",
+            "response": f"已分配给 {agent.agent_id} ({agent.role.value})",
+            "config": {"task_id": task_id, "priority": task.get("priority", "normal")},
+            "duration": 0,
+            "status": "success"
+        })
+        
         # 创建 Task 对象
         task_obj = Task(
             task_id=task["task_id"],
@@ -760,7 +899,23 @@ class OpenClawHarness:
         )
         
         # 执行
-        return agent.execute(task_obj)
+        result = agent.execute(task_obj)
+        
+        # 记录执行完成步骤
+        tracer.add_step({
+            "step_index": 2,
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "caller": agent.agent_id,
+            "callee": "LLM",
+            "action": "execute",
+            "prompt": task["description"],
+            "response": result.result if result else "",
+            "config": {},
+            "duration": result.duration if result else 0,
+            "status": result.status if result else "failed"
+        })
+        
+        return result
     
     def submit_and_wait(self, description: str, agent_id: str = "auto",
                     timeout: float = 300.0) -> TaskResult:
