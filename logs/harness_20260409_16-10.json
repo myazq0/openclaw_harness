@@ -1,0 +1,1 @@
+{"requests": [{"id": "e92b6f87", "task": "测试执行追踪功能", "agent": "auto", "priority": 1, "status": "completed", "start_time": "16:12:14", "tokens": 9, "duration": 0.2173299789428711, "result": "❌ API 错误: HTTP Error 401: Unauthorized"}], "messages": []}
